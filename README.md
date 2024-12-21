@@ -85,9 +85,8 @@ We’re not here to define what changes it will bring to the world—let it happ
 
 ```bash
 git clone https://github.com/ai16z/eliza-starter.git
-
+cd eliza-starter
 cp .env.example .env
-
 pnpm i && pnpm build && pnpm start
 ```
 

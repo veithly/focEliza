@@ -103,6 +103,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import yargs from "yargs";
 import {dominosPlugin} from "@elizaos/plugin-dominos";
+import { createMinaPlugin } from '@elizaos/plugin-mina';
+import { MinaEnvConfig } from '@elizaos/plugin-mina/dist/types';
 
 const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
 const __dirname = path.dirname(__filename); // get the name of the directory
@@ -620,6 +622,23 @@ function getSecret(character: Character, secret: string) {
 
 let nodePlugin: any | undefined;
 
+// Add Mina environment configuration
+function getMinaConfig(): MinaEnvConfig {
+  return {
+    networkUrl: process.env.MINA_NETWORK_URL || 'https://proxy.berkeley.minaexplorer.com/graphql',
+    network: (process.env.MINA_NETWORK || 'berkeley') as 'berkeley' | 'mainnet',
+    deployerKey: process.env.MINA_DEPLOYER_KEY || '',
+    publicKey: process.env.MINA_PUBLIC_KEY || '',
+    contractAddress: process.env.MINA_CONTRACT_ADDRESS || '',
+    defaultFee: Number(process.env.MINA_DEFAULT_FEE || '0.1'),
+    characterContractAddress: process.env.MINA_CHARACTER_CONTRACT_ADDRESS || '',
+    memoryContractAddress: process.env.MINA_MEMORY_CONTRACT_ADDRESS || '',
+    proverUrl: process.env.MINA_PROVER_URL || 'http://localhost:8080',
+    verificationKey: process.env.MINA_VERIFICATION_KEY || ''
+  };
+}
+
+// Add Mina plugin initialization to createAgent function
 export async function createAgent(
     character: Character,
     db: IDatabaseAdapter,
@@ -627,6 +646,19 @@ export async function createAgent(
     token: string
 ): Promise<AgentRuntime> {
     elizaLogger.log(`Creating runtime for character ${character.name}`);
+
+    // Initialize Mina plugin if configuration exists
+    let minaPlugin;
+    const minaConfig = getMinaConfig();
+    if (minaConfig.deployerKey && minaConfig.publicKey) {
+        try {
+            minaPlugin = createMinaPlugin({ envConfig: minaConfig });
+            await minaPlugin.init();
+            elizaLogger.log('Mina plugin initialized successfully');
+        } catch (err) {
+            elizaLogger.error('Failed to initialize Mina plugin:', err);
+        }
+    }
 
     nodePlugin ??= createNodePlugin();
 
@@ -854,6 +886,8 @@ export async function createAgent(
             getSecret(character, "QUAI_PRIVATE_KEY")
                 ? quaiPlugin
                 : null,
+            getSecret(character, "MINA_DEPLOYER_KEY") &&
+            getSecret(character, "MINA_PUBLIC_KEY") ? minaPlugin : null
         ].filter(Boolean),
         providers: [],
         actions: [],
@@ -969,6 +1003,29 @@ async function startAgent(
             cache,
             token
         );
+
+        // Initialize Mina plugin and load character data if available
+        const minaPlugin = runtime.plugins.find(p => p.name === 'mina');
+        if (minaPlugin) {
+            try {
+                // Load character data from Mina blockchain
+                const characterData = await minaPlugin.loadCharacter(character.id);
+                if (characterData) {
+                    // Update character with blockchain data
+                    character.lastUpdated = characterData.lastUpdated;
+                    character.isVerified = characterData.isVerified;
+
+                    // Load memory from blockchain
+                    const memoryData = await minaPlugin.loadMemory(character.id);
+                    if (memoryData) {
+                        // Update character memory
+                        await cache.set(`memory:${character.id}`, memoryData);
+                    }
+                }
+            } catch (err) {
+                elizaLogger.error('Failed to load character data from Mina:', err);
+            }
+        }
 
         // start services/plugins/process knowledge
         await runtime.initialize();
